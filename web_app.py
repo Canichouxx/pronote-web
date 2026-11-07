@@ -6,13 +6,13 @@ import secrets
 import threading
 import uuid
 from datetime import date, datetime
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from flask import Flask, Response, redirect, render_template_string, request, session
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
-app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+app.config.update(MAX_CONTENT_LENGTH=8 * 1024 * 1024, SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
                   SESSION_COOKIE_SECURE=bool(os.environ.get("RENDER") or os.environ.get("HTTPS_ONLY")))
 
 SESSIONS = {}  # sid -> {"creds": {...}, "data": {...}, "lock": Lock}  (en mémoire : rien n'est écrit sur disque)
@@ -53,6 +53,9 @@ def friendly(e):
         return "Identifiant ou mot de passe EduConnect incorrect."
     if "HubEduConnect" in s:
         return "Ton lycée n'est pas compatible avec cette connexion EduConnect. Utilise la méthode QR code."
+    if "Connection failure" in s:
+        return ("La connexion EduConnect automatique n'a pas abouti (ton lycée n'utilise sûrement pas ce chemin). "
+                "Utilise la méthode QR code.")
     if "IP address is suspended" in s:
         return "Pronote a bloqué l'adresse IP du serveur un moment. Réessaie plus tard."
     if "MFA" in type(e).__name__:
@@ -64,12 +67,29 @@ def friendly(e):
     return s[:220] or type(e).__name__
 
 
-def login(mode, f, device_uuid):
+def decode_qr_image(file):
+    """Lit le QR code d'une capture d'écran envoyée par l'utilisateur."""
+    try:
+        import zxingcpp
+        from PIL import Image
+        img = Image.open(file.stream).convert("RGB")
+        found = zxingcpp.read_barcodes(img)
+    except Exception:
+        raise Exception("Impossible de lire cette image. Envoie une capture d'écran (PNG ou JPG).")
+    if not found:
+        raise Exception("Aucun QR code lisible sur l'image : envoie une capture nette, avec le QR code en entier.")
+    return found[0].text
+
+
+def login(mode, f, device_uuid, files=None):
     import pronotepy
     import pronotepy.ent as ent_mod
     if mode == "qr":
+        text = f.get("qr", "").strip()
+        if not text and files and files.get("qrimg") and files["qrimg"].filename:
+            text = decode_qr_image(files["qrimg"])
         try:
-            qr = json.loads(f.get("qr", "").strip())
+            qr = json.loads(text)
             qr["jeton"], qr["login"], qr["url"]
         except Exception:
             raise Exception("Contenu du QR code invalide : colle tout le texte lu dans le QR code.")
@@ -127,7 +147,9 @@ def current():
 def home():
     s = current()
     if not s:
-        return render_template_string(PAGE, logged=False, error=request.args.get("e"), ents=ent_names())
+        sel = request.args.get("m", "edu")
+        return render_template_string(PAGE, logged=False, error=request.args.get("e"), ents=ent_names(),
+                                      sel=sel if sel in ("edu", "qr", "pwd") else "edu")
     return render_template_string(PAGE, logged=True, d=s["data"])
 
 
@@ -137,14 +159,16 @@ def do_login():
     try:
         dev = session.get("dev") or uuid.uuid4().hex
         session["dev"] = dev
-        c = login(mode, request.form, dev)
+        c = login(mode, request.form, dev, request.files)
         data = fetch(c)
         sid = secrets.token_hex(16)
         SESSIONS[sid] = {"creds": c.export_credentials(), "data": data, "lock": threading.Lock()}
         session["sid"] = sid
         return redirect("/")
     except Exception as e:
-        return redirect("/?e=" + friendly(e).replace("#", "").replace("&", "et"))
+        msg = friendly(e)
+        sel = "qr" if ("méthode QR code" in msg and mode != "qr") else mode  # on bascule sur le QR code si c'est la solution
+        return redirect("/?m=" + sel + "&e=" + quote(msg))
 
 
 @app.post("/refresh")
@@ -159,7 +183,7 @@ def refresh():
                 s["data"] = fetch(c)
             except Exception as e:
                 SESSIONS.pop(session.pop("sid", None), None)
-                return redirect("/?e=Session expirée, reconnecte-toi. (" + friendly(e)[:80].replace("&", "et") + ")")
+                return redirect("/?m=qr&e=" + quote("Session expirée, reconnecte-toi. (" + friendly(e)[:80] + ")"))
     return redirect("/")
 
 
@@ -211,15 +235,17 @@ section{display:none}section.on{display:block}
 .wrap{margin-left:max(130px,calc(50% - 280px))}}
 </style></head><body>
 {% if not logged %}<div class="wrap"><h1 style="text-align:center;color:var(--acc);font-size:38px;margin-top:40px">Pronote</h1>
-<form method="post" action="/login" id="f">
+<form method="post" action="/login" id="f" enctype="multipart/form-data">
 <div class="modes">
-<label><input type="radio" name="mode" value="edu" checked><span>EduConnect</span></label>
-<label><input type="radio" name="mode" value="qr"><span>QR code</span></label>
-<label><input type="radio" name="mode" value="pwd"><span>Identifiant Pronote</span></label></div>
+<label><input type="radio" name="mode" value="edu" {{'checked' if sel=='edu'}}><span>EduConnect</span></label>
+<label><input type="radio" name="mode" value="qr" {{'checked' if sel=='qr'}}><span>QR code</span></label>
+<label><input type="radio" name="mode" value="pwd" {{'checked' if sel=='pwd'}}><span>Identifiant Pronote</span></label></div>
 <div data-m="edu pwd"><input name="url" placeholder="Lien Pronote du lycée"></div>
 <div data-m="pwd"><select name="ent"><option value="">Aucun ENT (connexion directe)</option>{% for n in ents %}<option>{{n}}</option>{% endfor %}</select></div>
 <div data-m="edu pwd"><input name="user" placeholder="Identifiant" autocomplete="username"><input name="pwd" type="password" placeholder="Mot de passe" autocomplete="current-password"></div>
-<div data-m="qr"><textarea name="qr" placeholder="Colle ici le contenu du QR code"></textarea><input name="pin" inputmode="numeric" maxlength="4" placeholder="Code à 4 chiffres choisi avec le QR code"></div>
+<div data-m="qr"><p class="sub">Sur Pronote (version ordinateur) : clique sur le petit QR code en haut à droite, choisis 4 chiffres, puis envoie ici une capture d'écran du QR code.</p>
+<label class="sub">Capture d'écran du QR code</label><input type="file" name="qrimg" accept="image/*">
+<label class="sub">…ou colle le texte du QR code</label><textarea name="qr" placeholder="{&quot;jeton&quot;: ..."></textarea><input name="pin" inputmode="numeric" maxlength="4" placeholder="Code à 4 chiffres choisi avec le QR code"></div>
 {% if error %}<p class="err">{{error}}</p>{% endif %}<button>Se connecter</button></form></div>
 <script>const f=document.getElementById('f');function m(){const v=f.mode.value;f.querySelectorAll('[data-m]').forEach(e=>e.classList.toggle('hide',!e.dataset.m.split(' ').includes(v)))}
 f.addEventListener('change',m);m();f.addEventListener('submit',()=>{f.querySelector('button').textContent='Connexion...'})</script>
