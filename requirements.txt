@@ -1,0 +1,4 @@
+flask
+gunicorn
+pronotepy
+autoslot
