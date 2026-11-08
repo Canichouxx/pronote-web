@@ -208,7 +208,7 @@ ICONS = {
     "edt": '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/>',
 }
 
-PAGE = """<!doctype html><html lang="fr"><head><meta charset="utf-8">
+PAGE = r"""<!doctype html><html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Pronote</title>
 <style>
 :root{--bg:#0d0d12;--card:#1a1a24;--acc:#786bff;--grey:#73738a;--txt:#ececf5;color-scheme:dark}
@@ -240,14 +240,17 @@ section{display:none}section.on{display:block}
 <label><input type="radio" name="mode" value="edu" {{'checked' if sel=='edu'}}><span>EduConnect</span></label>
 <label><input type="radio" name="mode" value="qr" {{'checked' if sel=='qr'}}><span>QR code</span></label>
 <label><input type="radio" name="mode" value="pwd" {{'checked' if sel=='pwd'}}><span>Identifiant Pronote</span></label></div>
-<div data-m="edu pwd"><input name="url" placeholder="Lien Pronote du lycée"></div>
+<div data-m="edu pwd qr"><input name="url" placeholder="Lien Pronote du lycée"></div>
 <div data-m="pwd"><select name="ent"><option value="">Aucun ENT (connexion directe)</option>{% for n in ents %}<option>{{n}}</option>{% endfor %}</select></div>
 <div data-m="edu pwd"><input name="user" placeholder="Identifiant" autocomplete="username"><input name="pwd" type="password" placeholder="Mot de passe" autocomplete="current-password"></div>
-<div data-m="qr"><p class="sub">Sur Pronote (version ordinateur) : clique sur le petit QR code en haut à droite, choisis 4 chiffres, puis envoie ici une capture d'écran du QR code.</p>
+<div data-m="qr"><p class="sub">1) Ouvre Pronote avec le bouton et connecte-toi avec EduConnect. 2) Clique sur le petit QR code en haut à droite et choisis 4 chiffres. 3) Envoie ici une capture d'écran du QR code.</p>
+<button type="button" class="ghost" onclick="openP()">Ouvrir Pronote dans une fenêtre (EduConnect)</button>
 <label class="sub">Capture d'écran du QR code</label><input type="file" name="qrimg" accept="image/*">
 <label class="sub">…ou colle le texte du QR code</label><textarea name="qr" placeholder="{&quot;jeton&quot;: ..."></textarea><input name="pin" inputmode="numeric" maxlength="4" placeholder="Code à 4 chiffres choisi avec le QR code"></div>
 {% if error %}<p class="err">{{error}}</p>{% endif %}<button>Se connecter</button></form></div>
-<script>const f=document.getElementById('f');function m(){const v=f.mode.value;f.querySelectorAll('[data-m]').forEach(e=>e.classList.toggle('hide',!e.dataset.m.split(' ').includes(v)))}
+<script>const f=document.getElementById('f');
+function openP(){let u=f.url.value.trim().split('?')[0].replace('mobile.eleve.html','eleve.html');if(!u){f.url.focus();return}if(!/^https?:\/\//.test(u))u='https://'+u;if(!/\.html$/.test(u))u=u.replace(/\/$/,'')+'/eleve.html';window.open(u,'pronote','width=520,height=760')}
+function m(){const v=f.mode.value;f.querySelectorAll('[data-m]').forEach(e=>e.classList.toggle('hide',!e.dataset.m.split(' ').includes(v)))}
 f.addEventListener('change',m);m();f.addEventListener('submit',()=>{f.querySelector('button').textContent='Connexion...'})</script>
 {% else %}<div class="wrap">
 <section id="home" class="on"><h1>Accueil</h1><div class="card"><div>Salut {{d.name}}<small>Données de {{d.at}}</small></div></div>
